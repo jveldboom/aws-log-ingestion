@@ -160,8 +160,20 @@ def _get_log_type(event):
     '''
     if 'awslogs' in event:
         return 'cw_logs'
+    elif ('Records' in event
+        and 'kinesis' in event['Records'][0]
+        and 'aws:kinesis:record' in event['Records'][0]['eventName']):
+
+        return 'kinesis'
     return 'unknown'
 
+def _get_log_event_account(log_entry):
+    '''
+    Get account id where the log originated
+    '''
+
+    log = json.loads(log_entry)
+    return log['owner']
 
 def _send_log_entry(log_entry, context):
     '''
@@ -169,10 +181,15 @@ def _send_log_entry(log_entry, context):
     server. If it is necessary, entries will be split in different payloads
     Log entry is sent along with the Lambda function's execution context
     '''
+
+    account_id = _get_log_event_account(log_entry)
+
     data = {
         'context': {
-            'function_name': context.function_name,
-            'invoked_function_arn': context.invoked_function_arn,
+            #'function_name': context.function_name,
+            #'invoked_function_arn': context.invoked_function_arn,
+            'function_name': 'does-not-exist',
+            'invoked_function_arn': 'arn:aws:lambda:us-east-1:'+account_id+':function:does-not-exist',
             'log_group_name': context.log_group_name,
             'log_stream_name': context.log_stream_name
         },
@@ -238,6 +255,7 @@ def _get_license_key(license_key=None):
     '''
     This functions gets New Relic's license key from env vars.
     '''
+
     if license_key:
         return license_key
 
@@ -484,6 +502,16 @@ def lambda_handler(event, context):
                     log_entry_json['logEvents'][0]['timestamp']/1000.0)))
 
         _send_log_entry(log_entry, context)
+
+    elif log_type == 'kinesis':
+        event_data = b64decode(event['Records'][0]['kinesis']['data'])
+        try:
+            log_entry = gzip.decompress(event_data).decode('utf-8')
+            for log_line in log_entry.splitlines():
+                _send_log_entry(log_line, context)
+        except Exception as e:
+            print("Error: unable to decompress event data", e)
+            print(event_data)
 
     else:
         print('Not supported')
